@@ -2,7 +2,7 @@
 
 > **Status:** Planning
 > **Last Updated:** 2026-06-08
-> **Version:** 0.1.0
+> **Version:** 0.2.0
 
 ---
 
@@ -71,6 +71,14 @@ One person, one record.
 
 This table is intentionally minimal. It stores only what is needed for authentication.
 All financial data belongs to the `Household`, not to the `User` directly.
+
+> **Implementation note:** All primary keys in this document are described as `UUID`.
+> In the Prisma schema, `@id @default(uuid())` on a `String` field generates UUID
+> *values*, but the underlying PostgreSQL column type is `TEXT`, not the native
+> `UUID` type. This is intentional and applies to every table's primary key.
+> The value is still a valid UUID string — only the column type differs from a
+> strict reading of "UUID" in this document. This does not affect querying,
+> indexing, or relations.
 
 ### Fields
 
@@ -210,6 +218,15 @@ This table also carries the `role` field — it is not just a connection, it def
 If a user could only ever belong to one household, we could put `household_id` directly
 on the `User` table. But since a user can belong to multiple households, we need a
 separate row per user-household pair. That is exactly what a junction table is.
+
+> **MVP note (v1):** The `HouseholdMember` table is included in the schema from the
+> start because it is the correct architectural model. However, the invitation flow,
+> member onboarding UI, and multi-member management features are **not implemented in
+> the MVP**. In v1, when a user creates a household, a single `HouseholdMember` record
+> with `role = OWNER` is created automatically. Additional members cannot be invited
+> through the application yet. Member management is planned for a post-MVP phase.
+> The table is here so that adding those features later requires only new API routes
+> and UI — no schema changes.
 
 ### Fields
 
@@ -600,11 +617,21 @@ or deleted.
 | `updated_at` | TIMESTAMPTZ | NOT NULL, DEFAULT NOW() | Last modification timestamp |
 
 **Note on `saved_amount`:** Unlike `Budget` where spent is calculated from transactions,
-`saved_amount` is stored directly here. Why the difference?
+`saved_amount` is stored directly and updated manually by the user.
 
-Savings contributions are not always transaction-based. A user might manually update
-how much they've set aside. In v2, we can link a "Savings Transfer" transaction to
-auto-increment this value, but for v1 manual updates keep it simple.
+> **v1 — intentional simplification:** `saved_amount` is a manually maintained field.
+> The user updates it themselves to reflect how much they have set aside toward the goal.
+> This is a deliberate MVP simplification. Savings contributions are not always
+> transaction-based — a user may set money aside in a separate bank account or
+> physical envelope — so linking this field to transactions is not always meaningful.
+>
+> **v2 — planned improvement:** `saved_amount` may be calculated automatically from
+> dedicated savings transactions. If the user tags a `Transaction` with a
+> "Savings Transfer" category and links it to a goal, the application could
+> aggregate those transactions instead of relying on manual updates.
+> This would make the field a derived value (like `Budget` spent amounts) rather
+> than a stored one. The transition would require adding a nullable
+> `savings_goal_id` foreign key to the `Transaction` table.
 
 **Note on `status`:**
 - `ACTIVE` — in progress
@@ -656,14 +683,31 @@ Saved so far: 47,500 RSD (19%). Deadline: 1 July 2027.*
 
 ### Purpose
 
-Stores AI-generated content produced for a household. Every time the AI analysis
-or meal planner is run, the output is saved here. This serves two purposes:
+Stores AI-generated content produced for a household. This table serves both
+MVP AI features: **budget analysis** and **meal planning**. The `type` field
+distinguishes which kind of content a record contains.
 
-1. **Display** — show the most recent insight without calling the AI API again
-2. **History** — allow the household to review past analyses
+Every time an AI feature is triggered, the output is saved here. This serves two purposes:
+
+1. **Display** — show the most recent result without calling the AI API again
+2. **History** — allow the household to review past analyses and meal plans
 
 AI API calls cost money. Storing results means we only regenerate when the user
-explicitly requests it, not on every page load.
+explicitly requests a refresh, not on every page load.
+
+> **MVP AI features (v1):**
+> - `BUDGET_ANALYSIS` — reviews spending for a selected month; identifies over-budget
+>   categories; makes savings recommendations
+> - `MEAL_PLAN` — generates a weekly meal plan using seasonal, locally available
+>   Serbian ingredients; provides estimated cost based on reference price data
+>
+> `SAVINGS_ADVICE` is defined in the ENUM for forward compatibility but is not
+> triggered by any MVP feature.
+>
+> **Future consideration:** If meal planning grows significantly in scope — structured
+> ingredient lists, per-recipe cost breakdowns, or shopping list generation — the
+> `MEAL_PLAN` content currently stored as text may be migrated to a dedicated
+> `MealPlan` table. For MVP, text storage in `AIInsight` is sufficient.
 
 ### Fields
 
@@ -690,9 +734,9 @@ Since we only read the snapshot back (never query inside it), `TEXT` would techn
 work, but `JSONB` communicates intent: this column holds structured data.
 
 **Note on `type` ENUM values:**
-- `BUDGET_ANALYSIS` — a review of the household's spending patterns for a given month
-- `MEAL_PLAN` — a weekly meal plan with recipes and estimated costs
-- `SAVINGS_ADVICE` — targeted advice based on savings goals progress
+- `BUDGET_ANALYSIS` *(MVP)* — a review of the household's spending patterns for a given month
+- `MEAL_PLAN` *(MVP)* — a weekly meal plan using seasonal local ingredients with cost estimates
+- `SAVINGS_ADVICE` *(future)* — targeted advice based on savings goals progress; defined now for forward compatibility
 
 ### Relationships
 
@@ -810,6 +854,52 @@ This schema uses hard deletes (rows are permanently removed). For a v1 applicati
 with a small user base this is acceptable. In v2, consider adding `deleted_at TIMESTAMPTZ NULL`
 to `Transaction` and `Category` — a soft-delete pattern that keeps the row but hides
 it from queries. This enables undo operations and audit trails.
+
+---
+
+## 11. Future Table Considerations
+
+### RecurringTransaction (planned, post-MVP)
+
+In v1, fixed recurring expenses — rent, internet, subscriptions — are entered manually
+each month as ordinary `Transaction` records. This is intentional: it keeps the MVP
+simple and avoids building a scheduling system before the core features are proven.
+
+In a future version, a `RecurringTransaction` entity will define the schedule and
+amount for a repeating entry. A background job will generate the actual `Transaction`
+records automatically on the scheduled date.
+
+**Anticipated recurring examples:**
+- Rent — monthly, fixed amount
+- Internet bill — monthly, fixed amount
+- Netflix — monthly, fixed amount
+- Gym membership — monthly, fixed amount
+- Insurance premium — monthly or annual
+- Salary — monthly, fixed amount
+
+**Anticipated fields:**
+- `household_id` — which household this belongs to
+- `category_id` — which category the generated transactions are tagged with
+- `amount` — the recurring amount
+- `description` — e.g. "Monthly rent"
+- `frequency` — ENUM: `MONTHLY`, `WEEKLY`, `ANNUAL`
+- `start_date` — when the recurrence begins
+- `end_date` — optional; when the recurrence stops
+- `next_due_date` — the next date a transaction should be generated
+- `last_generated_at` — when the most recent auto-transaction was created
+
+**Impact on existing schema:** The `Transaction` table may gain a nullable
+`recurring_source_id` foreign key at that time, so generated transactions can be
+traced back to their recurring rule. No current table changes are required.
+
+### MealPlan (possible, post-MVP)
+
+If meal planning grows significantly in scope — structured ingredient lists,
+per-recipe cost breakdowns linked to grocery prices, or shopping list generation
+— the `MEAL_PLAN` content stored as text in `AIInsight` may be migrated to a
+dedicated `MealPlan` table with structured fields.
+
+For MVP, plain text storage in `AIInsight` is sufficient. No action needed now.
 
 ---
 
