@@ -7,7 +7,27 @@
 
 ---
 
-## Purpose of This Journal
+## Handoff Note — For New Chat Session
+
+This document is the primary handoff reference. Read "Current Status" and
+"What Comes Next" at the bottom first — that is the immediate starting point.
+
+**Working agreement to re-establish:**
+- Claude acts as senior engineer and mentor — explains every decision, never generates large code blocks without explanation, builds incrementally
+- Learning Mode format for every major task: What We Are Building, Why We Need It, What I Should Learn, Implementation Plan, Common Beginner Mistakes
+- A task is only complete when Vladimir can explain what it does, why it exists, and how it fits the project — not just when the code runs
+- Architecture first, code second
+- Be direct when answers are wrong — explain the correct reasoning clearly
+
+**Project repository:** `git@github.com:vladmarkov80/budget-app.git`  
+**Local path:** `D:\budget-app`  
+**Active branch:** `dev`  
+**Database:** PostgreSQL 18, local, database name `budgetapp_dev`  
+**Credentials:** stored in `D:\budget-app\.env.local` (not committed to Git)
+
+---
+
+
 
 This journal records what was built, what was learned, and what was understood
 at each stage of the project. It is not a task list — it is a record of growth.
