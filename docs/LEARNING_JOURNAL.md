@@ -1,7 +1,7 @@
 # LEARNING_JOURNAL.md — Vladimir's Dev Journey
 
 > **Started:** 2026-06-08  
-> **Last Updated:** 2026-06-14  
+> **Last Updated:** 2026-06-16  
 > **Project:** Family Budgeting Application  
 > **Stack:** Next.js · TypeScript · Tailwind CSS · PostgreSQL · Prisma
 
@@ -26,8 +26,6 @@ This document is the primary handoff reference. Read "Current Status" and
 **Credentials:** stored in `D:\budget-app\.env.local` (not committed to Git)
 
 ---
-
-
 
 This journal records what was built, what was learned, and what was understood
 at each stage of the project. It is not a task list — it is a record of growth.
@@ -231,7 +229,7 @@ Simply typing `cd D:\Projects` from C: drive does not work.
 
 ### Sprint 1 — Group B: Next.js Initialisation
 **Date:** 2026-06-11  
-**Status:** 🔵 In progress
+**Status:** ✅ Complete
 
 #### What Was Built
 - Next.js 14 project created with `create-next-app`
@@ -299,7 +297,7 @@ Route groups (folders in parentheses) organise files without affecting the URL.
 
 ### Sprint 1 — Group D: PostgreSQL & Prisma Setup
 **Date:** 2026-06-14  
-**Status:** 🔵 In progress — schema being built incrementally (Option A)
+**Status:** ✅ Complete
 
 #### What Was Built
 - PostgreSQL database `budgetapp_dev` created via pgAdmin
@@ -308,21 +306,23 @@ Route groups (folders in parentheses) organise files without affecting the URL.
 - `dotenv` installed; `prisma.config.ts` reconfigured to load `.env.local` (single source of truth for secrets)
 - Placeholder `.env` deleted; `.env` added to `.gitignore` as defense in depth
 - First migration run: `User` table created via `npx prisma migrate dev --name init`
-- Prisma Client generated manually via `npx prisma generate` (auto-run did not trigger in this Prisma version)
+- Prisma Client generated manually via `npx prisma generate`
 - Verified in pgAdmin: `User` and `_prisma_migrations` tables exist in `budgetapp_dev`
 
-#### Schema Progress (Option A — incremental)
+#### Full Schema Built — All 8 Tables (2026-06-16)
 
-| Table | Status |
-|-------|--------|
-| User | ✅ Migrated |
-| Household | 🔵 Next — drafted but not yet written/migrated |
-| HouseholdMember | ⬜ Not started |
-| Category | ⬜ Not started |
-| Transaction | ⬜ Not started |
-| Budget | ⬜ Not started |
-| SavingsGoal | ⬜ Not started |
-| AIInsight | ⬜ Not started |
+| Table | Migration Name | Status |
+|-------|---------------|--------|
+| User | init | ✅ Migrated |
+| Household | add_household | ✅ Migrated |
+| HouseholdMember | add_household_member | ✅ Migrated |
+| Category | add_category | ✅ Migrated |
+| Transaction | add_transaction | ✅ Migrated |
+| Budget | add_budget | ✅ Migrated |
+| SavingsGoal | add_savings_goal | ✅ Migrated |
+| AIInsight | add_ai_insight | ✅ Migrated |
+
+All tables verified in both pgAdmin and Prisma Studio (`localhost:5555`).
 
 #### Key Concepts Learned
 
@@ -337,7 +337,17 @@ for secrets, matching Next.js's own convention.
 Instead of generating into `node_modules/@prisma/client` (old behaviour), Prisma 7
 writes readable TypeScript source files into `src/generated/prisma/`. This folder
 is gitignored — it is fully regenerable from `schema.prisma` via `npx prisma generate`,
-so per our "decision vs. regenerable" rule, it does not belong in Git.
+so it does not belong in Git. Always import from `src/generated/prisma/client`, not
+from the folder root.
+
+**Prisma 7 requires a database adapter**
+Prisma 7 no longer connects to the database automatically from a connection string.
+You must install `@prisma/adapter-pg` and pass an adapter instance into `PrismaClient`:
+```typescript
+import { PrismaPg } from "@prisma/adapter-pg"
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL })
+const prisma = new PrismaClient({ adapter })
+```
 
 **Anatomy of a Prisma model**
 ```prisma
@@ -353,63 +363,164 @@ model User {
 - `String?` (with `?`) → optional / nullable column
 - `@default(now())` → sets the value automatically on creation
 - `@updatedAt` → updates the value automatically on every change
-- Prisma fields use `camelCase`; Prisma maps these to database columns
 
-**Foreign keys and relations require two fields working together** *(introduced, not yet implemented)*
-1. A scalar field — the actual column storing the ID (e.g. `createdById String`)
-2. A relation field — no database column; tells Prisma/TypeScript what this connects
-   to (e.g. `createdBy User @relation(fields: [createdById], references: [id])`)
+**Foreign keys and relations — two fields working together**
+When a table needs to reference another table, two fields are always required:
 
-The "one" side of a one-to-many relation also needs a reverse field with no column
-(e.g. `households Household[]` on `User`), so TypeScript knows `user.households` exists.
+1. A scalar field — the actual database column storing the ID:
+   `createdById String`
 
-**`npx` vs `npm`**
-`npm` manages packages (install, uninstall). `npx` *runs* a tool — either one
-installed locally in the project, or downloads it temporarily to run once.
-Prisma CLI commands always use `npx prisma ...`.
+2. A relation field — no database column; a TypeScript navigation shortcut:
+   `createdBy User @relation(fields: [createdById], references: [id])`
 
-#### What the Generated SQL Looked Like
+The database stores only the UUID in `createdById`. When your code accesses
+`household.createdBy`, Prisma runs a SQL JOIN behind the scenes and returns
+the full User object. Without the relation field, you would only have a raw
+UUID string — useless on its own.
 
-```sql
-CREATE TABLE "User" (
-    "id" TEXT NOT NULL,
-    "email" TEXT NOT NULL,
-    "passwordHash" TEXT NOT NULL,
-    "name" TEXT NOT NULL,
-    "avatarUrl" TEXT,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-    CONSTRAINT "User_pkey" PRIMARY KEY ("id")
-);
-CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
+**Reverse relations are required on both sides**
+Prisma requires both sides of every relation to be declared. If `Household`
+has a `createdBy User` relation, then `User` must have a `households Household[]`
+field. This field has no database column — it is purely a TypeScript navigation hint.
+Prisma will refuse to run if either side is missing.
+
+**Junction tables — solving many-to-many relationships**
+A database column can only hold one value. You cannot store multiple household IDs
+in a single `userId` column. A junction table solves this by turning one
+many-to-many relationship into two one-to-many relationships.
+
+`HouseholdMember` is our junction table:
+```
+User ──────< HouseholdMember >────── Household
+```
+Each row represents one membership. One user, one household, one role.
+A user can appear many times (once per household) — but never twice in the same household.
+
+**Composite unique constraints**
+`@@unique([userId, householdId])` means the *combination* of both values must be unique.
+This is different from `@unique` on `userId` alone, which would limit a user to one
+household ever. The composite constraint allows:
+- User A → Household X ✅
+- User A → Household Y ✅
+- User A → Household X again ❌ (blocked)
+
+**Self-referencing relations**
+A table can reference itself. `Category` has a `parentId` that points to another
+row in the same `Category` table — enabling subcategories like Food → Groceries.
+Self-referencing relations require a name label so Prisma knows which direction is which:
+```prisma
+parent   Category?  @relation("CategoryChildren", fields: [parentId], references: [id])
+children Category[] @relation("CategoryChildren")
 ```
 
-**Decision recorded in DATABASE.md:** `@default(uuid())` on a `String` field produces
-UUID *values* stored in a `TEXT` column — not PostgreSQL's native `UUID` type.
-This applies to every table's primary key in this project. Functionally equivalent;
-noted as an implementation detail, not changed.
+**Enums — enforced value lists**
+An enum defines a fixed set of allowed values. The database rejects anything else.
+```prisma
+enum Role {
+  OWNER
+  MEMBER
+}
+```
+Used for: `Role` (OWNER/MEMBER), `TransactionType` (INCOME/EXPENSE), `AIInsightType`
+(BUDGET_ANALYSIS/MEAL_PLAN). Enums prevent typos and invalid data at the database level.
 
+**Why `amount` uses Decimal, not Float**
+`Float` cannot represent most decimal fractions exactly.
+`0.1 + 0.2 = 0.30000000000000004` in float arithmetic — a silent, dangerous bug in
+financial software. `Decimal @db.Decimal(12, 2)` is exact: up to 12 digits total,
+always 2 after the decimal point. Always use Decimal for money.
 
+**Never store calculated fields**
+Fields like "budget remaining" or "goal progress percentage" are never stored in
+the database. They are calculated at query time from source data.
+Stored calculated fields go stale the moment their source data changes — causing
+silent bugs where the displayed value no longer matches reality.
+
+**`date` vs `createdAt` on Transaction**
+These are two different things:
+- `date` — when the money actually moved (e.g. Tuesday)
+- `createdAt` — when the record was entered into the app (e.g. Thursday)
+You might enter last Tuesday's grocery run on Thursday. Always store both.
+
+**The Prisma singleton pattern**
+`src/lib/prisma.ts` exports one shared Prisma client instance. Every API route
+imports from this file — never creates its own client directly.
+
+Why: Next.js in development hot-reloads modules. Each hot reload would create a new
+database connection. The singleton stores the instance on `globalThis` so it survives
+hot reloads and the connection pool is never exhausted.
+
+**`npx` vs `npm`**
+`npm` manages packages (install, uninstall, run scripts).
+`npx` runs a tool — either one installed locally in the project, or downloads it
+temporarily. Prisma CLI commands always use `npx prisma ...`.
+
+**Seed scripts**
+A seed script populates the database with initial data. Run with `npx prisma db seed`.
+Used to create test users, households, and default categories so development can
+proceed without manually entering data. Never commit real passwords or personal data
+in a seed script — use placeholder values.
+
+#### Mistakes Made and Lessons Learned
 
 | Mistake | What Happened | Fix | Lesson |
 |---------|--------------|-----|--------|
 | Cloned repo to wrong drive | `cd D:\Projects` did not switch drives — cloned to C: instead | Deleted clone, switched with `D:` first, cloned again | On Windows, switching drives requires typing the drive letter (`D:`) before using `cd` |
 | PowerShell blocked npx | Execution policy prevented running npm scripts | `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` | Windows security setting — standard fix for developers |
 | README conflict on init | `create-next-app` refused to run because README.md existed | Deleted README.md first, then ran the command | `create-next-app` requires an empty directory |
-| Manually moved project to new folder, lost `.git` | Moved files to `D:\Budgeting app` via Explorer; `.git` folder (hidden) was left behind in the old location, and the new folder had a capital letter + space, plus the moved files were from a build that used `app/` instead of `src/app/` | Moved the orphaned `.git` folder into the new location with `Move-Item`; renamed the folder to `budget-app` (npm rejects capitals/spaces in project names); deleted all Next.js files and re-ran `create-next-app` correctly with `src/` directory | Never move a Git repo manually via file explorer — hidden `.git` folders get left behind. npm project names must be lowercase with no spaces. Always verify `src/app` exists after `create-next-app` |
-| `Rename-Item` / `Remove-Item` not recognized | Commands are PowerShell-only; terminal had switched to Command Prompt (cmd) | Used cmd equivalents: `ren`, `rmdir /s /q`, `del` | PowerShell and Command Prompt have different command sets — check which shell is active (prompt shows `PS D:\>` for PowerShell, `D:\>` for cmd) |
-| `create-next-app` refused due to existing `.env` files | `.env.local` and `.env.example` were already in the target folder | Temporarily moved both files to `D:\`, ran the installer, then moved them back | `create-next-app` requires an empty (or near-empty) directory; non-Next.js files like env files must be moved out temporarily |
+| Manually moved project to new folder, lost `.git` | Moved files via Explorer; `.git` folder (hidden) was left behind | Moved the orphaned `.git` folder with `Move-Item` | Never move a Git repo manually via file explorer — hidden `.git` folders get left behind |
+| `Rename-Item` / `Remove-Item` not recognized | Commands are PowerShell-only; terminal had switched to Command Prompt | Used cmd equivalents: `ren`, `rmdir /s /q`, `del` | PowerShell and Command Prompt have different command sets |
+| `create-next-app` refused due to existing `.env` files | `.env.local` and `.env.example` were already in the target folder | Temporarily moved both files, ran installer, moved back | `create-next-app` requires an empty directory |
+| Prisma generate not run after adding models | Seed script failed because `src/generated/prisma/client` was out of date | Run `npx prisma generate` after every schema change | Always regenerate the client after modifying `schema.prisma` |
+| Wrong import path for generated client | Importing from folder root instead of `client.ts` | Changed import to `../src/generated/prisma/client` | Prisma 7 requires importing from `client.ts` directly, not the folder |
+| `&&` command chaining fails on Windows | `cd prisma && ts-node seed.ts` does not work in PowerShell or cmd | Used `tsx` runner from project root instead | Windows does not support `&&` chaining in all shell contexts — use `tsx` |
+| CSS warnings for `@tailwind` in VS Code | VS Code does not understand Tailwind directives by default | Install "Tailwind CSS IntelliSense" extension | These are editor warnings only — the app runs correctly regardless |
 
 ---
 
 ## Current Status
 
-**Project location:** `D:\budget-app`
-**Branch:** `dev`
-**Structure verified:** `src/app/` exists correctly, dev server runs at `localhost:3000`
-**Git status:** Repository intact, remote connected to `vladmarkov80/budget-app`, `.env.local` correctly gitignored
-**Database:** `budgetapp_dev` running locally, `User` table migrated and verified in pgAdmin
-**Last commit:** "chore: initialise Next.js project with TypeScript, Tailwind, and App Router" — Prisma setup (schema, migration, config) is NOT yet committed
+**Project location:** `D:\budget-app`  
+**Branch:** `dev`  
+**Last commit:** `feat: complete database schema, migrations, prisma singleton, and seed script`  
+**Database:** All 8 tables migrated and verified. Seed data present (Vladimir / Markov Family / 5 categories).  
+**Prisma Studio:** Accessible at `localhost:5555` via `npx prisma studio`
+
+### What Has Been Committed
+
+| Commit | Description |
+|--------|-------------|
+| `ebafa48` | Initial commit (main) |
+| `2bbe97f` | chore: initialise Next.js project with TypeScript, Tailwind, and App Router |
+| `dffe17d` | feat: configure Prisma with PostgreSQL and add User model |
+| `fb73e4e` | feat: complete database schema, migrations, prisma singleton, and seed script |
+
+---
+
+## What Comes Next
+
+**Pick up here next session:** Sprint 1, Group E — Verification tasks, then Sprint 2.
+
+**Group E tasks (short — complete these first):**
+- Run `npm run type-check` (or `npx tsc --noEmit`) and confirm zero TypeScript errors
+- Confirm Prisma Studio shows all 8 tables with seed data
+- Confirm dev server still runs at `localhost:3000`
+- Push any remaining uncommitted changes
+
+**Then Sprint 2 — Authentication:**
+This is the first feature sprint. We will implement:
+- User registration (POST /api/auth/register)
+- NextAuth.js login with credentials provider
+- Session management (JWT in httpOnly cookie)
+- Protected route middleware — redirect unauthenticated users to /login
+- Login and register pages (UI)
+
+Authentication must be complete before any other feature — every API route
+depends on knowing who the caller is.
+
+**VS Code housekeeping (do before Sprint 2):**
+Install the "Tailwind CSS IntelliSense" extension to eliminate the CSS `@tailwind`
+warnings in the editor. Search for it in the Extensions panel (Ctrl+Shift+X).
 
 ---
 
@@ -433,46 +544,13 @@ noted as an implementation detail, not changed.
 | Middleware | Code that runs between a request arriving and the route handler responding |
 | Type safety | The guarantee that a variable holds the type of data you expect |
 | Foreign key | A column that stores the ID of a row in another table — creates a link between tables |
-| Relation | A Prisma-only field (no database column) that lets code navigate between linked models, e.g. `household.createdBy.email` |
-
----
-
-## What Comes Next
-
-**Pick up here tomorrow:** Sprint 1, Group D — Task D6 (Option A, incremental schema)
-
-**Immediate next step:** Write the `Household` model in `schema.prisma`. This introduces
-foreign keys and relations for the first time. The pattern to apply:
-
-```prisma
-model Household {
-  id          String   @id @default(uuid())
-  name        String
-  currency    String   @default("RSD")
-  createdById String
-  createdBy   User     @relation(fields: [createdById], references: [id])
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-}
-```
-
-Plus add the reverse relation to `User`:
-```prisma
-households Household[]
-```
-
-Then run `npx prisma migrate dev --name add_household` and `npx prisma generate`,
-and verify the new table in pgAdmin.
-
-**Remaining Sprint 1 tasks after schema:**
-- Continue Option A: HouseholdMember, Category, Transaction, Budget, SavingsGoal, AIInsight (one or two tables at a time)
-- D10: Create `src/lib/prisma.ts` singleton
-- D11: Minimal seed script (one User, one Household, 2–3 Categories)
-- Group E: Verification — `npm run type-check`, Prisma Studio, commit, push
-
-**Reminder:** commit today's Prisma work (schema, migration, `prisma.config.ts`,
-`.gitignore` changes) before adding more tables — small, frequent commits are easier
-to debug than one large one.
+| Relation | A Prisma-only field (no database column) that lets code navigate between linked models |
+| Scalar field | A real database column — stores an actual value (string, number, date) |
+| Composite unique | A uniqueness constraint across multiple columns together, not individually |
+| Enum | A fixed list of allowed values enforced at the database level |
+| Singleton | A pattern ensuring only one instance of something exists — used for the Prisma client |
+| Adapter | A connector between Prisma and the specific database driver (e.g. `@prisma/adapter-pg`) |
+| Self-referencing relation | A table row that points to another row in the same table (e.g. Category parent/child) |
 
 ---
 
